@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>McKinsey / BCG Diagram Generator</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<!-- Toast -->
+<div id="toast" class="toast hidden"></div>
+
+<div class="container">
+  <!-- Header -->
+  <div class="header">
+    <div class="header-icon">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+    </div>
+    <div class="header-text">
+      <h1>McKinsey / BCG Diagram Generator</h1>
+      <p>Consulting-grade diagrams — export SVG, PNG, PPTX</p>
+    </div>
+    <button class="btn-log" onclick="toggleDebug()">
+      <span id="debugToggleLabel">Show</span> Log
+    </button>
+  </div>
+
+  <!-- Debug log -->
+  <div id="debugPanel" class="debug-panel hidden">
+    <div id="debugContent" class="debug-empty">No log entries yet. Generate a diagram to see debug output.</div>
+  </div>
+
+  <!-- INPUT VIEW -->
+  <div id="inputView">
+    <div class="card">
+      <!-- Mode tabs -->
+      <div class="tabs">
+        <button class="tab active" data-mode="text" onclick="setMode('text')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+          Text
+        </button>
+        <button class="tab" data-mode="image" onclick="setMode('image')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+          Image / Sketch
+        </button>
+        <button class="tab" data-mode="both" onclick="setMode('both')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M21 15v4a2 2 0 01-2 2"/></svg>
+          Text + Image
+        </button>
+      </div>
+
+      <div class="card-body">
+        <!-- Text input -->
+        <div id="textSection">
+          <div id="textLabel" class="section-label hidden">Description</div>
+          <textarea id="textInput" rows="6"
+            placeholder="Describe your diagram, e.g.:&#10;- Porter's 5 Forces for cloud infrastructure&#10;- 3-horizon growth strategy&#10;- Digital maturity model across 5 dimensions"></textarea>
+        </div>
+
+        <!-- Image input -->
+        <div id="imageSection" class="hidden">
+          <div id="imageLabel" class="section-label hidden">Reference Image</div>
+          <div class="sketch-toggle">
+            <button class="toggle-btn" id="sketchToggle" onclick="toggleSketch()">
+              <span class="toggle-track" id="sketchTrack"><span class="toggle-knob" id="sketchKnob"></span></span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              Sketch mode
+            </button>
+            <span id="sketchBadge" class="sketch-badge hidden">Contrast boost on</span>
+          </div>
+          <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()"
+               ondragover="event.preventDefault();this.classList.add('drag-over')"
+               ondragleave="this.classList.remove('drag-over')"
+               ondrop="event.preventDefault();this.classList.remove('drag-over');handleFile(event.dataTransfer.files[0])">
+            <div id="dropPlaceholder">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+              <p class="drop-title">Drop image or click to browse</p>
+              <p class="drop-sub">JPG, PNG, WebP — max 15 MB</p>
+            </div>
+            <div id="previewWrap" class="hidden">
+              <img id="imgPreview" src="" alt="preview">
+              <button class="remove-img" onclick="event.stopPropagation();removeImage()">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+          </div>
+          <input type="file" id="fileInput" accept="image/*" style="display:none" onchange="handleFile(this.files[0])">
+        </div>
+
+        <!-- Diagram type -->
+        <div class="row-flex">
+          <span class="small-label">Diagram type</span>
+          <select id="diagType">
+            <option>Auto (best fit)</option>
+            <option>2x2 Matrix</option>
+            <option>Process Flow / Swimlane</option>
+            <option>Pyramid / Hierarchy</option>
+            <option>Venn Diagram</option>
+            <option>Timeline / Roadmap</option>
+            <option>Waterfall Chart</option>
+            <option>Radar / Spider Chart</option>
+            <option>Funnel</option>
+            <option>Porter's 5 Forces</option>
+            <option>McKinsey 7S</option>
+          </select>
+        </div>
+
+        <!-- Font selector -->
+        <div class="row-flex">
+          <span class="small-label">Font</span>
+          <select id="fontSelect">
+            <option value="Aptos">Aptos</option>
+            <option value="Helvetica Neue">Helvetica Neue</option>
+            <option value="Arial">Arial</option>
+            <option value="Georgia">Georgia</option>
+            <option value="Times New Roman">Times New Roman</option>
+            <option value="Courier New">Courier New</option>
+            <option value="Verdana">Verdana</option>
+            <option value="Garamond">Garamond</option>
+            <option value="Palatino">Palatino</option>
+            <option value="Trebuchet MS">Trebuchet MS</option>
+            <option value="Inter">Inter</option>
+            <option value="SF Pro Display">SF Pro Display</option>
+            <option value="Noto Sans SC">Noto Sans SC</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="card-footer">
+        <div class="theme-row">
+          <span class="small-label">Theme</span>
+          <div class="theme-dots">
+            <button class="theme-dot active" data-idx="0" style="background:#0033A0" title="McKinsey Blue" onclick="setTheme(0)"></button>
+            <button class="theme-dot" data-idx="1" style="background:#00843D" title="BCG Green" onclick="setTheme(1)"></button>
+            <button class="theme-dot" data-idx="2" style="background:#334155" title="Slate" onclick="setTheme(2)"></button>
+            <button class="theme-dot" data-idx="3" style="background:#6366F1" title="Midnight" onclick="setTheme(3)"></button>
+            <button class="theme-dot" data-idx="4" style="background:#B45309" title="Amber" onclick="setTheme(4)"></button>
+            <button class="theme-dot" data-idx="5" style="background:#1257FD" title="Custom" onclick="setTheme(5)"></button>
+          </div>
+          <input type="color" id="customColorPicker" class="custom-color hidden" value="#1257FD" oninput="customColor=this.value;updateThemeLabel()">
+          <span class="theme-name" id="themeName">McKinsey Blue</span>
+        </div>
+        <button class="btn-generate" id="generateBtn" onclick="generate()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 4V2m0 2v2m0-2h-2m2 0h2M3 14l9-9 9 9M5 12v7a1 1 0 001 1h12a1 1 0 001-1v-7"/></svg>
+          Generate Diagram
+        </button>
+      </div>
+    </div>
+
+    <!-- Examples -->
+    <div class="examples">
+      <button class="example-chip" onclick="useExample(this.textContent)">Porter's 5 Forces for cloud infrastructure</button>
+      <button class="example-chip" onclick="useExample(this.textContent)">3-horizon growth strategy roadmap</button>
+      <button class="example-chip" onclick="useExample(this.textContent)">Digital transformation value levers pyramid</button>
+      <button class="example-chip" onclick="useExample(this.textContent)">Talent capability maturity matrix</button>
+      <button class="example-chip" onclick="useExample(this.textContent)">M&A value creation waterfall</button>
+    </div>
+  </div>
+
+  <!-- OUTPUT VIEW -->
+  <div id="outputView" class="hidden">
+    <div class="output-header">
+      <h2>Generated Diagram</h2>
+      <div class="export-buttons">
+        <button class="btn-ghost" onclick="exportSVG()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+          SVG
+        </button>
+        <button class="btn-ghost" onclick="exportPNG()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          PNG
+        </button>
+        <button class="btn-dark" onclick="exportPPTX()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          Export PPTX
+        </button>
+        <button class="btn-ghost" onclick="resetAll()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+          New
+        </button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="svg-preview" id="svgPreview"></div>
+    </div>
+    <p class="pptx-note">PPTX: diagram as full-bleed image with editable text layer overlaid.</p>
+  </div>
+</div>
+
+<script>
+// ── State ──
+let mode = 'text';
+let themeIdx = 0;
+let customColor = '#1257FD';
+let sketchMode = false;
+let currentSVG = '';
+let imageB64 = null;
+let busy = false;
+
+const THEMES = [
+  { name:'McKinsey Blue', accent:'#0033A0', bg:'#FFFFFF', text:'#1A1A2E' },
+  { name:'BCG Green',     accent:'#00843D', bg:'#FFFFFF', text:'#1C1C1C' },
+  { name:'Slate',         accent:'#334155', bg:'#F8FAFC', text:'#0F172A' },
+  { name:'Midnight',      accent:'#6366F1', bg:'#0F172A', text:'#F1F5F9' },
+  { name:'Amber',         accent:'#B45309', bg:'#FFFBF0', text:'#1C1917' },
+  { name:'Custom',        accent:'#1257FD', bg:'#FFFFFF', text:'#1A1A2E' },
+];
+
+const debugLines = [];
+
+function log(msg) {
+  const ts = new Date().toISOString().slice(11,23);
+  console.log('[Diagram]', msg);
+  debugLines.push(`[${ts}] ${msg}`);
+  if (debugLines.length > 30) debugLines.shift();
+  renderDebug();
+}
+
+function renderDebug() {
+  const el = document.getElementById('debugContent');
+  if (debugLines.length === 0) {
+    el.className = 'debug-empty';
+    el.innerHTML = 'No log entries yet. Generate a diagram to see debug output.';
+  } else {
+    el.className = '';
+    el.innerHTML = debugLines.map(l => `<div class="debug-line">${l}</div>`).join('');
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+function toggleDebug() {
+  const panel = document.getElementById('debugPanel');
+  const label = document.getElementById('debugToggleLabel');
+  panel.classList.toggle('hidden');
+  label.textContent = panel.classList.contains('hidden') ? 'Show' : 'Hide';
+}
+
+function notify(msg, type='info', dur=4000) {
+  const el = document.getElementById('toast');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span>${msg}</span><button onclick="this.parentElement.classList.add('hidden')">&times;</button>`;
+  if (dur > 0) setTimeout(() => el.classList.add('hidden'), dur);
+}
+
+// ── Mode ──
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.mode === m));
+
+  const textSec = document.getElementById('textSection');
+  const imgSec = document.getElementById('imageSection');
+  const textLabel = document.getElementById('textLabel');
+  const imgLabel = document.getElementById('imageLabel');
+  const textarea = document.getElementById('textInput');
+
+  textSec.classList.toggle('hidden', m === 'image');
+  imgSec.classList.toggle('hidden', m === 'text');
+  textLabel.classList.toggle('hidden', m !== 'both');
+  imgLabel.classList.toggle('hidden', m !== 'both');
+
+  if (m === 'both') {
+    textarea.rows = 4;
+    textarea.placeholder = 'Add context for the image, e.g. "Recreate this whiteboard as a McKinsey process flow."';
+  } else {
+    textarea.rows = 6;
+    textarea.placeholder = "Describe your diagram, e.g.:\n- Porter's 5 Forces for cloud infrastructure\n- 3-horizon growth strategy\n- Digital maturity model across 5 dimensions";
+  }
+}
+
+// ── Theme ──
+function setTheme(idx) {
+  themeIdx = idx;
+  document.querySelectorAll('.theme-dot').forEach(d => d.classList.toggle('active', parseInt(d.dataset.idx) === idx));
+  document.getElementById('customColorPicker').classList.toggle('hidden', idx !== 5);
+  updateThemeLabel();
+}
+
+function updateThemeLabel() {
+  document.getElementById('themeName').textContent = themeIdx === 5 ? customColor : THEMES[themeIdx].name;
+}
+
+// ── Sketch ──
+function toggleSketch() {
+  sketchMode = !sketchMode;
+  document.getElementById('sketchTrack').classList.toggle('on', sketchMode);
+  document.getElementById('sketchBadge').classList.toggle('hidden', !sketchMode);
+}
+
+// ── Image ──
+function handleFile(f) {
+  if (!f) return;
+  if (!f.type.startsWith('image/')) { notify('Please upload an image file.', 'error'); return; }
+  if (f.size > 15*1024*1024) { notify('Max 15 MB.', 'error'); return; }
+  const reader = new FileReader();
+  reader.onload = e => {
+    imageB64 = e.target.result;
+    document.getElementById('imgPreview').src = imageB64;
+    document.getElementById('dropPlaceholder').classList.add('hidden');
+    document.getElementById('previewWrap').classList.remove('hidden');
+  };
+  reader.readAsDataURL(f);
+}
+
+function removeImage() {
+  imageB64 = null;
+  document.getElementById('imgPreview').src = '';
+  document.getElementById('dropPlaceholder').classList.remove('hidden');
+  document.getElementById('previewWrap').classList.add('hidden');
+  document.getElementById('fileInput').value = '';
+}
+
+function useExample(text) {
+  setMode('text');
+  document.getElementById('textInput').value = text;
+}
+
+// ── Generate ──
+async function generate() {
+  const textVal = document.getElementById('textInput').value.trim();
+  const needText = mode === 'text' || mode === 'both';
+  const needImg = mode === 'image' || mode === 'both';
+
+  if (needText && !textVal) { notify('Please enter a description.', 'error'); return; }
+  if (needImg && !imageB64) { notify('Please upload an image.', 'error'); return; }
+  if (busy) return;
+
+  busy = true;
+  debugLines.length = 0;
+  const btn = document.getElementById('generateBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Generating...';
+  log('Starting generation. Mode: ' + mode);
+
+  const theme = THEMES[themeIdx];
+  const accent = themeIdx === 5 ? customColor : theme.accent;
+  const font = document.getElementById('fontSelect').value;
+
+  try {
+    log('Sending request to Gemini API...');
+    const resp = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: textVal,
+        mode: mode,
+        diagType: document.getElementById('diagType').value,
+        bg: theme.bg,
+        text_color: theme.text,
+        accent: accent,
+        font: font,
+        image: needImg ? imageB64 : null,
+      })
+    });
+
+    log('Response status: ' + resp.status);
+    const data = await resp.json();
+
+    if (!resp.ok || data.error) {
+      log('Error: ' + (data.error || 'Unknown'));
+      if (data.raw) log('Raw preview: ' + data.raw);
+      throw new Error(data.error || 'Generation failed');
+    }
+
+    currentSVG = data.svg;
+    log('SVG received. Length: ' + currentSVG.length);
+
+    // Show output view
+    document.getElementById('inputView').classList.add('hidden');
+    document.getElementById('outputView').classList.remove('hidden');
+    document.getElementById('svgPreview').innerHTML = currentSVG;
+    notify('Diagram ready!', 'success');
+
+  } catch (err) {
+    log('ERROR: ' + err.message);
+    notify(err.message, 'error');
+  } finally {
+    busy = false;
+    btn.disabled = false;
+    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 4V2m0 2v2m0-2h-2m2 0h2M3 14l9-9 9 9M5 12v7a1 1 0 001 1h12a1 1 0 001-1v-7"/></svg> Generate Diagram';
+  }
+}
+
+// ── Sanitize SVG for standalone rendering ──
+function sanitizeSVG(raw) {
+  let s = raw.trim();
+  // Ensure xmlns is present (required for <img> / Blob rendering)
+  if (s.includes('<svg') && !s.includes('xmlns=')) {
+    s = s.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
+  // Add explicit width/height so canvas knows the intrinsic size
+  if (!s.match(/<svg[^>]*\bwidth\s*=/)) {
+    s = s.replace('<svg', '<svg width="1920" height="1080"');
+  }
+  // Strip any stray non-XML (Gemini sometimes appends text after </svg>)
+  const end = s.lastIndexOf('</svg>');
+  if (end !== -1) s = s.slice(0, end + 6);
+  return s;
+}
+
+// ── SVG to PNG (client-side canvas) ──
+function svgToPngB64(svgStr) {
+  return new Promise((resolve, reject) => {
+    const safe = sanitizeSVG(svgStr);
+    const canvas = document.createElement('canvas');
+    canvas.width = 1920; canvas.height = 1080;
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    img.onload = () => {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, 1920, 1080);
+      ctx.drawImage(img, 0, 0, 1920, 1080);
+      URL.revokeObjectURL(img.src);
+      resolve(canvas.toDataURL('image/png').split(',')[1]);
+    };
+    img.onerror = () => reject(new Error('SVG render failed'));
+    img.src = URL.createObjectURL(new Blob([safe], { type: 'image/svg+xml;charset=utf-8' }));
+  });
+}
+
+// ── Exports ──
+function exportSVG() {
+  if (!currentSVG) return;
+  const blob = new Blob([currentSVG], { type: 'image/svg+xml;charset=utf-8' });
+  downloadBlob(blob, `diagram-${Date.now()}.svg`);
+  notify('SVG saved.', 'success');
+}
+
+async function exportPNG() {
+  if (!currentSVG) return;
+  notify('Rendering PNG...', 'info', 0);
+  try {
+    const b64 = await svgToPngB64(currentSVG);
+    const blob = await (await fetch('data:image/png;base64,' + b64)).blob();
+    downloadBlob(blob, `diagram-${Date.now()}.png`);
+    notify('PNG saved (1920x1080).', 'success');
+  } catch (e) { notify('PNG failed: ' + e.message, 'error'); }
+}
+
+async function exportPPTX() {
+  if (!currentSVG) return;
+  notify('Building editable PPTX...', 'info', 0);
+  const theme = THEMES[themeIdx];
+  try {
+    const resp = await fetch('/api/export/pptx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ svg: currentSVG, bg: theme.bg, text_color: theme.text })
+    });
+    if (!resp.ok) { const d = await resp.json(); throw new Error(d.error); }
+    const blob = await resp.blob();
+    downloadBlob(blob, `diagram-${Date.now()}.pptx`);
+    notify('PPTX saved! All shapes are editable.', 'success');
+  } catch (e) { notify('PPTX failed: ' + e.message, 'error'); }
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
+}
+
+function resetAll() {
+  currentSVG = '';
+  document.getElementById('inputView').classList.remove('hidden');
+  document.getElementById('outputView').classList.add('hidden');
+  document.getElementById('svgPreview').innerHTML = '';
+}
+</script>
+</body>
+</html>
