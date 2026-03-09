@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>McKinsey / BCG Diagram Generator</title>
+<title>Diagram Generator</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -17,8 +17,8 @@
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
     </div>
     <div class="header-text">
-      <h1>McKinsey / BCG Diagram Generator</h1>
-      <p>Consulting-grade diagrams — export SVG, PNG, PPTX</p>
+      <h1>Diagram Generator</h1>
+      <p>AI-powered diagrams — export SVG, PNG, PPTX</p>
     </div>
     <button class="btn-log" onclick="toggleDebug()">
       <span id="debugToggleLabel">Show</span> Log
@@ -101,7 +101,7 @@
             <option>Radar / Spider Chart</option>
             <option>Funnel</option>
             <option>Porter's 5 Forces</option>
-            <option>McKinsey 7S</option>
+            <option>Framework / 7S Model</option>
           </select>
         </div>
 
@@ -131,15 +131,15 @@
         <div class="theme-row">
           <span class="small-label">Theme</span>
           <div class="theme-dots">
-            <button class="theme-dot active" data-idx="0" style="background:#0033A0" title="McKinsey Blue" onclick="setTheme(0)"></button>
-            <button class="theme-dot" data-idx="1" style="background:#00843D" title="BCG Green" onclick="setTheme(1)"></button>
+            <button class="theme-dot active" data-idx="0" style="background:#0033A0" title="Classic Blue" onclick="setTheme(0)"></button>
+            <button class="theme-dot" data-idx="1" style="background:#00843D" title="Forest Green" onclick="setTheme(1)"></button>
             <button class="theme-dot" data-idx="2" style="background:#334155" title="Slate" onclick="setTheme(2)"></button>
             <button class="theme-dot" data-idx="3" style="background:#6366F1" title="Midnight" onclick="setTheme(3)"></button>
             <button class="theme-dot" data-idx="4" style="background:#B45309" title="Amber" onclick="setTheme(4)"></button>
             <button class="theme-dot" data-idx="5" style="background:#1257FD" title="Custom" onclick="setTheme(5)"></button>
           </div>
           <input type="color" id="customColorPicker" class="custom-color hidden" value="#1257FD" oninput="customColor=this.value;updateThemeLabel()">
-          <span class="theme-name" id="themeName">McKinsey Blue</span>
+          <span class="theme-name" id="themeName">Classic Blue</span>
         </div>
         <button class="btn-generate" id="generateBtn" onclick="generate()">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 4V2m0 2v2m0-2h-2m2 0h2M3 14l9-9 9 9M5 12v7a1 1 0 001 1h12a1 1 0 001-1v-7"/></svg>
@@ -184,7 +184,7 @@
     <div class="card">
       <div class="svg-preview" id="svgPreview"></div>
     </div>
-    <p class="pptx-note">PPTX: diagram as full-bleed image with editable text layer overlaid.</p>
+    <p class="pptx-note">PPTX export contains fully editable shapes and text.</p>
   </div>
 </div>
 
@@ -199,8 +199,8 @@ let imageB64 = null;
 let busy = false;
 
 const THEMES = [
-  { name:'McKinsey Blue', accent:'#0033A0', bg:'#FFFFFF', text:'#1A1A2E' },
-  { name:'BCG Green',     accent:'#00843D', bg:'#FFFFFF', text:'#1C1C1C' },
+  { name:'Classic Blue',  accent:'#0033A0', bg:'#FFFFFF', text:'#1A1A2E' },
+  { name:'Forest Green',  accent:'#00843D', bg:'#FFFFFF', text:'#1C1C1C' },
   { name:'Slate',         accent:'#334155', bg:'#F8FAFC', text:'#0F172A' },
   { name:'Midnight',      accent:'#6366F1', bg:'#0F172A', text:'#F1F5F9' },
   { name:'Amber',         accent:'#B45309', bg:'#FFFBF0', text:'#1C1917' },
@@ -261,7 +261,7 @@ function setMode(m) {
 
   if (m === 'both') {
     textarea.rows = 4;
-    textarea.placeholder = 'Add context for the image, e.g. "Recreate this whiteboard as a McKinsey process flow."';
+    textarea.placeholder = 'Add context for the image, e.g. "Recreate this whiteboard as a process flow diagram."';
   } else {
     textarea.rows = 6;
     textarea.placeholder = "Describe your diagram, e.g.:\n- Porter's 5 Forces for cloud infrastructure\n- 3-horizon growth strategy\n- Digital maturity model across 5 dimensions";

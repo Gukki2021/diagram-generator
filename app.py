@@ -951,7 +951,7 @@ def generate():
     type_note = "" if diag_type == "Auto (best fit)" else f" Preferred diagram type: {diag_type}."
 
     prompt = (
-        "You are a McKinsey/BCG slide designer. Create a professional SVG consulting diagram.\n\n"
+        "You are a professional diagram designer. Create a clean, professional SVG diagram.\n\n"
         f"TOPIC: {text_val or '(see image)'}\n\n"
         "STRICT SVG REQUIREMENTS:\n"
         "1. Output ONLY the SVG element. No explanation, no markdown, no code fences.\n"
@@ -996,7 +996,7 @@ def generate():
                 mime = image_b64.split(";")[0].split(":")[1]
 
             img_suffix = (
-                f"Convert this image into a professional McKinsey/BCG SVG diagram.\n\n{prompt}"
+                f"Convert this image into a professional SVG diagram.\n\n{prompt}"
                 if mode == "image"
                 else f"Use the image as structural reference. Description: {text_val}\n\n{prompt}"
             )
