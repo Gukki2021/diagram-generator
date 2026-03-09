@@ -476,8 +476,11 @@ def _find_containing_rect(x, y, rects, vb_w, vb_h):
         # Skip full-bleed background rects
         if rw >= vb_w * 0.95 and rh >= vb_h * 0.95:
             continue
-        # Check if text origin is inside this rect (with small margin)
-        margin = 5
+        # Skip very small rects (decorative dots, borders)
+        if rw < 10 or rh < 10:
+            continue
+        # Check if text origin is inside this rect (with generous margin)
+        margin = 20
         if rx - margin <= x <= rx + rw + margin and ry - margin <= y <= ry + rh + margin:
             area = rw * rh
             if area < best_area:
@@ -658,7 +661,9 @@ def _do_text(elem, ctx, ox, oy):
 
     # Convert font size: SVG units -> PPTX points
     # SVG font-size is in viewBox units, scale to inches then to points
-    pts = max(6, round(font_size * sy * 72))
+    # Use average of sx/sy for more uniform scaling
+    s_avg = (sx + sy) / 2
+    pts = max(6, round(font_size * s_avg * 72))
 
     # ── Try to find containing rect for better text box sizing ──
     container = _find_containing_rect(text_x, text_y, ctx["rects"],
@@ -680,14 +685,15 @@ def _do_text(elem, ctx, ox, oy):
     else:
         # Estimate text box size from text content
         max_chars = max(len(l) for l in lines)
-        # Better width estimation: ~0.55 * font_size per char (average)
-        char_w_inches = font_size * sx * 0.55
-        est_w = max(0.8, min(SLIDE_W - 0.2, max_chars * char_w_inches + 0.3))
-        est_h = max(0.3, len(lines) * font_size * sy * 1.5 + 0.1)
+        # Width estimation: ~0.6 * font_size per char (average), generous
+        char_w_inches = font_size * s_avg * 0.6
+        est_w = max(1.0, min(SLIDE_W - 0.4, max_chars * char_w_inches + 0.5))
+        line_h_inches = font_size * s_avg * 1.4
+        est_h = max(0.4, len(lines) * line_h_inches + 0.15)
 
         # SVG y = baseline → offset up by approx font height
         xi = text_x * sx
-        yi = max(0, text_y * sy - font_size * sy * 1.1)
+        yi = max(0, text_y * sy - font_size * sy * 1.0)
 
         if anchor == "middle":
             xi = max(0, xi - est_w / 2)
@@ -695,10 +701,10 @@ def _do_text(elem, ctx, ox, oy):
             xi = max(0, xi - est_w)
 
         # Clamp within slide
-        xi = max(0, min(xi, SLIDE_W - 0.3))
-        yi = max(0, min(yi, SLIDE_H - 0.2))
-        wi = max(0.2, min(est_w, SLIDE_W - xi))
-        hi = max(0.2, min(est_h, SLIDE_H - yi))
+        xi = max(0, min(xi, SLIDE_W - 0.5))
+        yi = max(0, min(yi, SLIDE_H - 0.3))
+        wi = max(0.3, min(est_w, SLIDE_W - xi))
+        hi = max(0.3, min(est_h, SLIDE_H - yi))
 
     # Clamp final dimensions
     wi = max(0.2, min(wi, SLIDE_W))
@@ -903,18 +909,39 @@ def _do_path(elem, ctx, ox, oy):
     if not d:
         return
 
+    # Skip paths with complex curves (they produce garbled output in PPTX)
+    # Only allow simple paths with M, L, H, V, Z commands
+    has_curves = bool(re.search(r"[CSQTAcsqta]", d))
+
     sx, sy, slide = ctx["sx"], ctx["sy"], ctx["slide"]
 
-    # Use full parser (handles C/S/Q/T/A curves)
-    pts = _parse_path_full(d, ox, oy)
-    if len(pts) < 2:
-        return
-
-    # Filter out degenerate paths (all points nearly the same)
-    xs = [p[0] for p in pts]
-    ys = [p[1] for p in pts]
-    if max(xs) - min(xs) < 1 and max(ys) - min(ys) < 1:
-        return
+    if has_curves:
+        # For curved paths, try to detect if it's a simple shape
+        # (e.g., rounded rect) and approximate with more segments
+        pts = _parse_path_full(d, ox, oy)
+        if len(pts) < 2:
+            return
+        # Filter out degenerate paths
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        if max(xs) - min(xs) < 2 and max(ys) - min(ys) < 2:
+            return
+        # Deduplicate nearly-identical consecutive points to reduce noise
+        clean_pts = [pts[0]]
+        for p in pts[1:]:
+            if abs(p[0] - clean_pts[-1][0]) > 0.5 or abs(p[1] - clean_pts[-1][1]) > 0.5:
+                clean_pts.append(p)
+        pts = clean_pts
+        if len(pts) < 2:
+            return
+    else:
+        pts = _parse_path_full(d, ox, oy)
+        if len(pts) < 2:
+            return
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        if max(xs) - min(xs) < 1 and max(ys) - min(ys) < 1:
+            return
 
     inch_pts = [(x * sx, y * sy) for x, y in pts]
     builder = slide.shapes.build_freeform(inch_pts[0][0], inch_pts[0][1], scale=EMU_PER_IN)
@@ -954,38 +981,87 @@ def generate():
     font = data.get("font", "Helvetica Neue")
     image_b64 = data.get("image", None)
 
-    type_note = "" if diag_type == "Auto (best fit)" else f" Preferred diagram type: {diag_type}."
+    type_note = "" if diag_type == "Auto (best fit)" else f"\nPREFERRED DIAGRAM TYPE: {diag_type}\n"
 
-    prompt = (
-        "You are a professional diagram designer. Create a clean, professional SVG diagram.\n\n"
-        f"TOPIC: {text_val or '(see image)'}\n\n"
-        "STRICT SVG REQUIREMENTS:\n"
-        "1. Output ONLY the SVG element. No explanation, no markdown, no code fences.\n"
-        '2. Start with: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080">\n'
-        "3. Do NOT add width or height attributes on the <svg> tag.\n"
-        f"4. Background: a single full <rect> fill=\"{theme_bg}\" covering 1920x1080.\n"
-        f"5. Primary text color: {theme_text}\n"
-        f"6. Accent color: {accent} (use sparingly, max 2 accent-colored elements)\n"
-        f'7. All text: font-family="\'{font}\',Arial,sans-serif"\n'
-        "8. Title: 44-52px bold, assertion-style (state the insight, not just the topic)\n"
-        "9. Body text: 20-24px. Captions: 14-16px.\n"
-        '10. Use clean rounded rects (rx="8") for boxes. 60px padding from edges.\n'
-        "11. Footer at bottom-left: 14px, color #94A3B8\n"
-        "12. IMPORTANT: Keep the diagram CLEAN. No random decorative lines, no stray paths, "
-        "no background scribbles, no abstract line art. Only draw intentional structural "
-        "elements (boxes, arrows, connectors, shapes). Every <line>, <path>, and <polyline> "
-        "must serve a clear purpose.\n"
-        "13. Use simple straight connectors (<line> or <polyline>) for arrows between boxes. "
-        "Use simple SVG path commands (M, L, H, V) for connectors. "
-        "Avoid complex curved paths (C, S, Q, A) unless absolutely necessary for the diagram type.\n"
-        "14. ALL text MUST be inside <text> elements. Each <text> element should use the "
-        "text-anchor attribute for alignment. When placing text inside a box, ensure "
-        "the text x,y coordinates fall within the box boundaries.\n"
-        "15. Keep text concise. If a label is long, break into multiple <tspan> lines "
-        "with dy attributes.\n"
-        "16. Use polygon elements for arrow shapes (triangular arrowheads), not complex paths.\n"
-        + type_note
-    )
+    prompt = f"""You are a top-tier McKinsey/BCG strategy consultant creating a presentation slide.
+Create a clean, professional SVG diagram in the style of McKinsey and BCG consulting decks.
+
+TOPIC: {text_val or '(see image)'}
+{type_note}
+DESIGN PRINCIPLES (McKinsey/BCG style):
+- Action-oriented title: state the insight/conclusion, not just the topic
+- Clean grid-based layout with clear visual hierarchy
+- Generous white space, no clutter
+- Each box should contain concise text (max 3-4 lines per box)
+- Use numbered labels or icons to guide the reader's eye
+- Source/footnote at bottom-left in small gray text
+
+=== STRICT SVG RULES (MUST FOLLOW) ===
+
+OUTPUT: Only the raw <svg> element. No markdown, no explanation, no code fences.
+
+CANVAS:
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080">
+Do NOT add width or height attributes on the <svg> tag.
+First child: <rect x="0" y="0" width="1920" height="1080" fill="{theme_bg}"/>
+
+ALLOWED ELEMENTS ONLY (DO NOT use any other SVG elements):
+- <rect> for boxes (use rx="8" for rounded corners)
+- <text> with <tspan> for all text content
+- <line> for straight connectors and arrows
+- <circle> for bullet points or decorative dots
+- <ellipse> for ovals
+- <polygon> for arrowheads and triangular shapes
+
+FORBIDDEN ELEMENTS (NEVER use these):
+- <path> — ABSOLUTELY FORBIDDEN. Never use path elements. They cause rendering errors.
+- <polyline> — use <line> instead
+- <use>, <image>, <foreignObject> — forbidden
+- CSS classes, <style> blocks, gradients, filters, clipPath, mask — forbidden
+
+COLORS:
+- Background: {theme_bg}
+- Primary text: {theme_text}
+- Accent: {accent} (for key boxes, headers, highlights — use sparingly)
+- Use lighter tints of the accent for secondary box fills (add opacity="0.1" or "0.15" on accent-colored rects)
+- Gray palette for borders/dividers: #E2E8F0, #CBD5E1, #94A3B8
+
+TYPOGRAPHY:
+- font-family="'{font}', Arial, sans-serif" on every <text> element
+- Title: font-size="44" to "52", font-weight="bold"
+- Subtitle/section headers: font-size="28" to "32", font-weight="bold"
+- Body text in boxes: font-size="18" to "22"
+- Labels/captions: font-size="14" to "16"
+- Footer/source: font-size="14", fill="#94A3B8"
+
+TEXT PLACEMENT RULES:
+- Every <text> MUST have text-anchor="middle" when centered in a box
+- For text inside a <rect>, the text x must equal rect_x + rect_width/2
+- For text inside a <rect>, the text y must be vertically centered within the rect
+- Use <tspan> with dy="24" or dy="28" for multi-line text within a box
+- Keep text SHORT: max 6-8 words per line, max 3-4 lines per box
+- ALL text content must be in English
+
+LAYOUT:
+- 80px padding from all edges
+- Title at top: y="70"
+- Main content area: y=130 to y=980
+- Footer/source at bottom: y="1050"
+- Minimum 20px gap between boxes
+- Align boxes to a grid (equal widths, equal heights in each row)
+
+ARROWS/CONNECTORS:
+- Use <line> elements with stroke and stroke-width for connectors
+- For arrowheads, place a small <polygon> triangle at the end of each line
+- Example arrow pointing right: <line x1="100" y1="200" x2="250" y2="200" stroke="#94A3B8" stroke-width="2"/>
+  followed by <polygon points="250,192 270,200 250,208" fill="#94A3B8"/>
+
+CRITICAL QUALITY CHECKS:
+- No text should overflow outside its containing box
+- No overlapping text elements
+- Every box that contains text must be large enough for the text
+- No random decorative elements — every shape must serve a purpose
+- The diagram must be immediately readable and professional"""
 
     try:
         model = genai.GenerativeModel("gemini-2.5-flash")
