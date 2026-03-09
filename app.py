@@ -32,6 +32,32 @@ EMU_PER_IN = 914400
 
 # ── SVG helpers ───────────────────────────────────────────────────────────────
 
+def _dedup_attrs(tag_match):
+    """Remove duplicate attributes within a single SVG tag."""
+    tag_str = tag_match.group(0)
+    # Find all attr="value" pairs
+    attrs = re.findall(r'''([\w\-:]+)\s*=\s*("[^"]*"|'[^']*')''', tag_str)
+    if not attrs:
+        return tag_str
+    seen = {}
+    for name, val in attrs:
+        seen[name] = val  # last one wins
+    # Check if there were duplicates
+    if len(seen) == len(attrs):
+        return tag_str  # no duplicates
+    # Rebuild the tag
+    tag_name_m = re.match(r'<([\w\-:]+)', tag_str)
+    if not tag_name_m:
+        return tag_str
+    tag_name = tag_name_m.group(1)
+    self_close = tag_str.rstrip().endswith("/>")
+    parts = [f"<{tag_name}"]
+    for name, val in seen.items():
+        parts.append(f' {name}={val}')
+    parts.append("/>" if self_close else ">")
+    return "".join(parts)
+
+
 def extract_svg(raw: str) -> str | None:
     if not raw:
         return None
@@ -43,6 +69,8 @@ def extract_svg(raw: str) -> str | None:
         svg = re.sub(r"&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)", "&amp;", svg)
         if 'xmlns=' not in svg.split('>')[0]:
             svg = svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"', 1)
+        # Remove duplicate attributes (Gemini sometimes emits them)
+        svg = re.sub(r'<[^>]+>', _dedup_attrs, svg)
         return svg
     return None
 
@@ -415,6 +443,31 @@ def _parse_path_full(d, ox, oy):
 
 # ── SVG → Editable PPTX converter ────────────────────────────────────────────
 
+def _fix_svg_xml(svg_str):
+    """Fix common SVG XML issues that cause parsing errors."""
+    s = svg_str
+    # Strip namespace declarations
+    s = re.sub(r"\sxmlns[^\"]*\"[^\"]*\"", "", s)
+    # Remove duplicate attributes
+    s = re.sub(r'<[^>]+>', _dedup_attrs, s)
+    # SVG void elements (should be self-closing, never have children)
+    _void = ("line", "rect", "circle", "ellipse", "polygon", "polyline",
+             "path", "use", "image", "br", "hr", "img")
+    for tag in _void:
+        # Fix <tag ...> (not self-closed) that has no matching </tag>
+        # by adding self-close slash
+        pattern = rf'<({tag}\b[^>]*[^/])>'
+        def _fix_void(m):
+            inner = m.group(1)
+            return f'<{inner}/>'
+        s = re.sub(pattern, _fix_void, s)
+        # Remove any erroneous closing tags for void elements
+        s = re.sub(rf'</{tag}\s*>', '', s)
+    # Remove CDATA
+    s = re.sub(r'<!\[CDATA\[.*?\]\]>', '', s, flags=re.DOTALL)
+    return s
+
+
 def build_editable_pptx(svg_str, bg_color, text_color):
     prs = Presentation()
     prs.slide_width = Inches(SLIDE_W)
@@ -426,9 +479,19 @@ def build_editable_pptx(svg_str, bg_color, text_color):
     bg.solid()
     bg.fore_color.rgb = RGBColor(*hex_to_rgb(bg_color))
 
-    # Parse SVG (strip namespace for easier iteration)
-    clean = re.sub(r"\sxmlns[^\"]*\"[^\"]*\"", "", svg_str)
-    root = ET.fromstring(clean)
+    # Parse SVG with error recovery
+    clean = _fix_svg_xml(svg_str)
+    try:
+        root = ET.fromstring(clean)
+    except ET.ParseError:
+        # Aggressive fix: wrap in try with html.parser-style recovery
+        # Strip everything after last </svg> and before first <svg
+        m = re.search(r'(<svg\b.*</svg>)', clean, re.DOTALL)
+        if m:
+            clean = m.group(1)
+        # Try removing problematic tags entirely
+        clean = re.sub(r'<(?!svg|/svg|rect|/rect|text|/text|tspan|/tspan|line|circle|ellipse|polygon|g|/g)[^>]*/?>', '', clean)
+        root = ET.fromstring(clean)
 
     vb = root.get("viewBox", "0 0 1920 1080").split()
     vb_w = float(vb[2]) if len(vb) > 2 else 1920
@@ -601,8 +664,7 @@ def _do_text(elem, ctx, ox, oy):
     # ── Gather tspan data (with per-tspan positioning) ──
     tspans = [ts for ts in elem if _tag(ts) == "tspan"]
 
-    # Collect lines with their individual positions
-    lines_data = []  # list of {"text": str, "x": float|None, "y": float|None, ...}
+    lines_data = []
     if tspans:
         for ts in tspans:
             t = "".join(ts.itertext()).strip()
@@ -611,20 +673,15 @@ def _do_text(elem, ctx, ox, oy):
             ts_x = ts.get("x")
             ts_y = ts.get("y")
             ts_dy = ts.get("dy")
-            # Per-tspan font overrides
-            ts_fs = _ga(ts, "font-size", "")
-            ts_fw = _ga(ts, "font-weight", "")
-            ts_fill = _ga(ts, "fill", "")
-            ts_ff = _ga(ts, "font-family", "")
             lines_data.append({
                 "text": t,
                 "x": _num(ts_x) if ts_x else None,
                 "y": _num(ts_y) if ts_y else None,
                 "dy": _num(ts_dy) if ts_dy else None,
-                "font_size": ts_fs,
-                "font_weight": ts_fw,
-                "fill": ts_fill,
-                "font_family": ts_ff,
+                "font_size": _ga(ts, "font-size", ""),
+                "font_weight": _ga(ts, "font-weight", ""),
+                "fill": _ga(ts, "fill", ""),
+                "font_family": _ga(ts, "font-family", ""),
             })
         if not lines_data:
             lines_data = [{"text": full_text}]
@@ -637,13 +694,12 @@ def _do_text(elem, ctx, ox, oy):
     text_x = _num(_ga(elem, "x")) + ox
     text_y = _num(_ga(elem, "y")) + oy
 
-    # If first tspan has explicit position, use it
     if lines_data[0].get("x") is not None:
         text_x = lines_data[0]["x"] + ox
     if lines_data[0].get("y") is not None:
         text_y = lines_data[0]["y"] + oy
 
-    # ── Font properties (from <text> element, tspan can override) ──
+    # ── Font properties ──
     font_size = _num(_ga(elem, "font-size"), 20)
     fw = _ga(elem, "font-weight", "")
     bold = fw in ("bold", "700", "800", "900")
@@ -660,38 +716,52 @@ def _do_text(elem, ctx, ox, oy):
         ff = "Arial"
 
     # Convert font size: SVG units -> PPTX points
-    # SVG font-size is in viewBox units, scale to inches then to points
-    # Use average of sx/sy for more uniform scaling
     s_avg = (sx + sy) / 2
     pts = max(6, round(font_size * s_avg * 72))
 
-    # ── Try to find containing rect for better text box sizing ──
+    # ── Try to find containing rect ──
     container = _find_containing_rect(text_x, text_y, ctx["rects"],
                                       ctx["vb_w"], ctx["vb_h"])
 
     if container:
-        # Use the container rect bounds for the text box
         rx, ry, rw, rh = container
         xi = rx * sx
         yi = ry * sy
         wi = rw * sx
         hi = rh * sy
-        # Add internal padding
-        pad = min(0.1, wi * 0.05)
-        xi += pad
-        yi += pad
-        wi -= 2 * pad
-        hi -= 2 * pad
+        # Internal padding
+        pad_x = min(0.12, wi * 0.06)
+        pad_y = min(0.08, hi * 0.06)
+        xi += pad_x
+        yi += pad_y
+        wi -= 2 * pad_x
+        hi -= 2 * pad_y
+
+        # Clamp font size so text fits inside the container
+        # Rough estimate: each line needs ~pts/72 inches height
+        available_h_inches = hi - 0.1
+        needed_h_inches = len(lines) * (pts / 72) * 1.3
+        if needed_h_inches > available_h_inches and available_h_inches > 0:
+            scale = available_h_inches / needed_h_inches
+            pts = max(6, round(pts * scale))
+
+        # Also check width: estimate chars per line
+        max_chars = max(len(l) for l in lines)
+        char_w_est = pts / 72 * 0.55  # inches per char at this point size
+        needed_w = max_chars * char_w_est
+        if needed_w > wi and wi > 0:
+            scale = wi / needed_w
+            pts = max(6, round(pts * scale))
+
     else:
         # Estimate text box size from text content
         max_chars = max(len(l) for l in lines)
-        # Width estimation: ~0.6 * font_size per char (average), generous
         char_w_inches = font_size * s_avg * 0.6
-        est_w = max(1.0, min(SLIDE_W - 0.4, max_chars * char_w_inches + 0.5))
+        est_w = max(1.0, min(SLIDE_W - 0.4, max_chars * char_w_inches + 0.6))
         line_h_inches = font_size * s_avg * 1.4
-        est_h = max(0.4, len(lines) * line_h_inches + 0.15)
+        est_h = max(0.4, len(lines) * line_h_inches + 0.2)
 
-        # SVG y = baseline → offset up by approx font height
+        # SVG y = baseline → offset up
         xi = text_x * sx
         yi = max(0, text_y * sy - font_size * sy * 1.0)
 
@@ -714,20 +784,20 @@ def _do_text(elem, ctx, ox, oy):
     txBox = slide.shapes.add_textbox(Inches(xi), Inches(yi), Inches(wi), Inches(hi))
     tf = txBox.text_frame
     tf.word_wrap = True
-    tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE  # shrink text to fit box
-    tf.margin_left = Inches(0.05)
-    tf.margin_right = Inches(0.05)
-    tf.margin_top = Inches(0.03)
-    tf.margin_bottom = Inches(0.03)
+    # Use TEXT_TO_FIT_SHAPE so PowerPoint auto-shrinks if text overflows
+    tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+    tf.margin_left = Inches(0.04)
+    tf.margin_right = Inches(0.04)
+    tf.margin_top = Inches(0.02)
+    tf.margin_bottom = Inches(0.02)
 
-    # Vertical alignment: center text in box if inside a container
-    if container:
-        try:
-            bodyPr = tf._txBody.find(qn("a:bodyPr"))
-            if bodyPr is not None:
-                bodyPr.set("anchor", "ctr")
-        except Exception:
-            pass
+    # Vertical alignment: center text in box
+    try:
+        bodyPr = tf._txBody.find(qn("a:bodyPr"))
+        if bodyPr is not None:
+            bodyPr.set("anchor", "ctr")
+    except Exception:
+        pass
 
     fc = _color(fill_val) or RGBColor(0x1A, 0x1A, 0x2E)
     align = PP_ALIGN.CENTER if anchor == "middle" else PP_ALIGN.RIGHT if anchor == "end" else PP_ALIGN.LEFT
@@ -748,7 +818,10 @@ def _do_text(elem, ctx, ox, oy):
         line_ff = ff
 
         if ld.get("font_size"):
-            line_pts = max(6, round(_num(ld["font_size"]) * sy * 72))
+            line_pts = max(6, round(_num(ld["font_size"]) * s_avg * 72))
+            # Also clamp overridden font size for container
+            if container:
+                line_pts = min(line_pts, pts)
         if ld.get("font_weight"):
             lfw = ld["font_weight"]
             line_bold = lfw in ("bold", "700", "800", "900")
@@ -766,7 +839,6 @@ def _do_text(elem, ctx, ox, oy):
             if lff:
                 line_ff = lff
 
-        # Use add_run() for reliable text insertion
         run = p.add_run()
         run.text = line_text
         run.font.size = Pt(line_pts)
