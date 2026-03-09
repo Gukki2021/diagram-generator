@@ -443,29 +443,81 @@ def _parse_path_full(d, ox, oy):
 
 # ── SVG → Editable PPTX converter ────────────────────────────────────────────
 
-def _fix_svg_xml(svg_str):
-    """Fix common SVG XML issues that cause parsing errors."""
-    s = svg_str
-    # Strip namespace declarations
-    s = re.sub(r"\sxmlns[^\"]*\"[^\"]*\"", "", s)
-    # Remove duplicate attributes
-    s = re.sub(r'<[^>]+>', _dedup_attrs, s)
-    # SVG void elements (should be self-closing, never have children)
-    _void = ("line", "rect", "circle", "ellipse", "polygon", "polyline",
-             "path", "use", "image", "br", "hr", "img")
-    for tag in _void:
-        # Fix <tag ...> (not self-closed) that has no matching </tag>
-        # by adding self-close slash
-        pattern = rf'<({tag}\b[^>]*[^/])>'
-        def _fix_void(m):
-            inner = m.group(1)
-            return f'<{inner}/>'
-        s = re.sub(pattern, _fix_void, s)
-        # Remove any erroneous closing tags for void elements
-        s = re.sub(rf'</{tag}\s*>', '', s)
+from html.parser import HTMLParser as _HTMLParser
+
+
+class _SVGCleaner(_HTMLParser):
+    """Tolerant SVG parser that rebuilds valid XML."""
+    _VOID = frozenset(("line", "rect", "circle", "ellipse", "polygon",
+                        "polyline", "path", "use", "image", "br", "hr", "img"))
+
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.parts = []
+        self._stack = []
+
+    def handle_starttag(self, tag, attrs):
+        # Deduplicate attributes (keep last)
+        seen = {}
+        for k, v in attrs:
+            seen[k] = v
+        attr_str = "".join(f' {k}="{v}"' if v is not None else f' {k}' for k, v in seen.items())
+        if tag in self._VOID:
+            self.parts.append(f"<{tag}{attr_str}/>")
+        else:
+            self.parts.append(f"<{tag}{attr_str}>")
+            self._stack.append(tag)
+
+    def handle_endtag(self, tag):
+        if tag in self._VOID:
+            return  # ignore stray closing tags for void elements
+        # Close any mismatched open tags above this one
+        while self._stack and self._stack[-1] != tag:
+            self.parts.append(f"</{self._stack.pop()}>")
+        if self._stack:
+            self._stack.pop()
+            self.parts.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        # Escape & in text content
+        data = data.replace("&", "&amp;").replace("<", "&lt;")
+        self.parts.append(data)
+
+    def handle_entityref(self, name):
+        self.parts.append(f"&{name};")
+
+    def handle_charref(self, name):
+        self.parts.append(f"&#{name};")
+
+    def close(self):
+        super().close()
+        # Close any remaining open tags
+        while self._stack:
+            self.parts.append(f"</{self._stack.pop()}>")
+
+    def get_xml(self):
+        return "".join(self.parts)
+
+
+def _clean_svg_to_xml(svg_str):
+    """Convert possibly-malformed SVG to valid XML using tolerant HTML parser."""
+    # Strip namespace declarations (they confuse ElementTree iteration)
+    s = re.sub(r'\sxmlns(?::\w+)?=["\'][^"\']*["\']', "", svg_str)
+    # Strip XML declarations
+    s = re.sub(r'<\?xml[^>]*\?>', '', s)
     # Remove CDATA
     s = re.sub(r'<!\[CDATA\[.*?\]\]>', '', s, flags=re.DOTALL)
-    return s
+
+    parser = _SVGCleaner()
+    try:
+        parser.feed(s)
+        parser.close()
+        return parser.get_xml()
+    except Exception:
+        # Last resort: strip all non-essential tags
+        s = re.sub(r'\sxmlns[^"]*"[^"]*"', "", svg_str)
+        s = re.sub(r'<[^>]+>', _dedup_attrs, s)
+        return s
 
 
 def build_editable_pptx(svg_str, bg_color, text_color):
@@ -479,19 +531,9 @@ def build_editable_pptx(svg_str, bg_color, text_color):
     bg.solid()
     bg.fore_color.rgb = RGBColor(*hex_to_rgb(bg_color))
 
-    # Parse SVG with error recovery
-    clean = _fix_svg_xml(svg_str)
-    try:
-        root = ET.fromstring(clean)
-    except ET.ParseError:
-        # Aggressive fix: wrap in try with html.parser-style recovery
-        # Strip everything after last </svg> and before first <svg
-        m = re.search(r'(<svg\b.*</svg>)', clean, re.DOTALL)
-        if m:
-            clean = m.group(1)
-        # Try removing problematic tags entirely
-        clean = re.sub(r'<(?!svg|/svg|rect|/rect|text|/text|tspan|/tspan|line|circle|ellipse|polygon|g|/g)[^>]*/?>', '', clean)
-        root = ET.fromstring(clean)
+    # Parse SVG with tolerant cleaner
+    clean = _clean_svg_to_xml(svg_str)
+    root = ET.fromstring(clean)
 
     vb = root.get("viewBox", "0 0 1920 1080").split()
     vb_w = float(vb[2]) if len(vb) > 2 else 1920
