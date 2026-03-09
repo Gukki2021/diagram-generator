@@ -22,7 +22,8 @@ from xml.etree import ElementTree as ET
 app = Flask(__name__)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-genai.configure(api_key=GEMINI_API_KEY)
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 SLIDE_W = 13.33
 SLIDE_H = 7.5
@@ -938,6 +939,11 @@ def index():
 
 @app.route("/api/generate", methods=["POST"])
 def generate():
+    if not GEMINI_API_KEY:
+        return jsonify({"error": "GEMINI_API_KEY not configured. Set it in environment variables."}), 500
+    if not getattr(genai, '_configured', True):
+        genai.configure(api_key=GEMINI_API_KEY)
+
     data = request.json
     text_val = data.get("text", "").strip()
     mode = data.get("mode", "text")
