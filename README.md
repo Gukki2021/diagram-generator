@@ -6,27 +6,33 @@ AI-powered diagram generator with editable PPTX export. No login required.
 
 ## Features
 
-- AI diagram generation (Google Gemini 2.5 Flash)
+- AI diagram generation (Anthropic Claude Opus 4.7, with sketch-to-diagram vision input)
 - 11 diagram types: 2x2 Matrix, Process Flow, Pyramid, Venn, Timeline, Waterfall, Radar, Funnel, Porter's 5 Forces, Framework
 - 6 color themes + custom color picker
 - 13 fonts including Aptos
 - Export to **SVG**, **PNG**, and **editable PPTX** (native shapes, not images)
 - Image/sketch input with drag-and-drop
+- Mobile-friendly (responsive web UI, works in any phone browser)
 - No login required for end users
 
 ## One-Click Deploy
 
 Click the **Deploy to Render** button above, then set:
 
-- `GEMINI_API_KEY` = your Google Gemini API key ([get one free](https://aistudio.google.com/apikey))
+- `ANTHROPIC_API_KEY` = your Anthropic API key ([create one](https://console.anthropic.com/settings/keys))
+
+Optionally override the model:
+
+- `CLAUDE_MODEL` = `claude-opus-4-7` (default), or `claude-sonnet-4-6` for lower cost
 
 ## Run Locally
 
 ```bash
 git clone https://github.com/Gukki2021/diagram-generator.git
 cd diagram-generator
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-export GEMINI_API_KEY=your_key_here
+echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 python app.py
 ```
 
@@ -36,12 +42,12 @@ Open http://localhost:5555
 
 ```bash
 docker build -t diagram-generator .
-docker run -p 5555:10000 -e GEMINI_API_KEY=your_key diagram-generator
+docker run -p 5555:10000 -e ANTHROPIC_API_KEY=your_key diagram-generator
 ```
 
 ## Tech Stack
 
 - Python / Flask
-- Google Gemini 2.5 Flash API
+- Anthropic Claude API (Opus 4.7 with adaptive thinking + vision)
 - python-pptx (editable PPTX export)
 - Vanilla JS frontend

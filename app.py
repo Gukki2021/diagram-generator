@@ -9,8 +9,11 @@ import time
 import warnings
 warnings.filterwarnings("ignore")
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from flask import Flask, render_template, request, jsonify, send_file
-import google.generativeai as genai
+import anthropic
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
@@ -21,9 +24,82 @@ from xml.etree import ElementTree as ET
 
 app = Flask(__name__)
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-4-7")
+_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+
+SYSTEM_PROMPT = """You are a top-tier McKinsey/BCG strategy consultant who creates presentation slides as clean SVG diagrams.
+
+OUTPUT FORMAT (STRICT):
+- Output ONLY the raw <svg> element. No markdown fences, no prose, no explanation.
+- Use viewBox="0 0 1920 1080" on the <svg> tag.
+- Do NOT add width or height attributes on the <svg> tag.
+- The first child must be a <rect x="0" y="0" width="1920" height="1080"/> filled with the user-specified background color.
+
+ALLOWED SVG ELEMENTS (use only these):
+- <rect> for boxes (rx="8" for rounded corners)
+- <text> with <tspan> for all text content
+- <line> for straight connectors and arrows
+- <circle> for bullet points or decorative dots
+- <ellipse> for ovals
+- <polygon> for arrowheads and triangular shapes
+
+FORBIDDEN SVG ELEMENTS (never use):
+- <path> — ABSOLUTELY FORBIDDEN, causes rendering errors
+- <polyline> — use <line> instead
+- <use>, <image>, <foreignObject>
+- CSS classes, <style> blocks, gradients, filters, clipPath, mask
+
+DESIGN PRINCIPLES (McKinsey/BCG style):
+- Action-oriented title: state the insight or conclusion, not just the topic
+- Clean grid-based layout with clear visual hierarchy
+- Generous white space, no clutter
+- Each box contains concise text (max 3-4 lines)
+- Use numbered labels or icons to guide the reader's eye
+- Source/footnote at bottom-left in small gray text
+
+TYPOGRAPHY (apply user-specified font on every <text>):
+- Title: font-size="44" to "52", font-weight="bold"
+- Subtitle/section headers: font-size="28" to "32", font-weight="bold"
+- Body text in boxes: font-size="18" to "22"
+- Labels/captions: font-size="14" to "16"
+- Footer/source: font-size="14", fill="#94A3B8"
+
+TEXT PLACEMENT:
+- Every <text> centered in a box MUST have text-anchor="middle"
+- Text x = rect_x + rect_width/2 for centered text
+- Text y must be vertically centered within its containing rect
+- Use <tspan> with dy="24" or dy="28" for multi-line text
+- Max 6-8 words per line, max 3-4 lines per box
+- ALL text content must be in English
+
+LAYOUT:
+- 80px padding from all edges
+- Title at top: y="70"
+- Main content area: y=130 to y=980
+- Footer/source at bottom: y="1050"
+- Minimum 20px gap between boxes
+- Align boxes to a grid (equal widths and heights within each row)
+
+ARROWS/CONNECTORS:
+- Use <line> with stroke and stroke-width for connectors
+- For arrowheads, append a small <polygon> triangle at the line's end
+- Example: <line x1="100" y1="200" x2="250" y2="200" stroke="#94A3B8" stroke-width="2"/>
+  followed by <polygon points="250,192 270,200 250,208" fill="#94A3B8"/>
+
+COLOR USAGE:
+- Use the user-specified background, primary text, and accent colors
+- Apply the accent sparingly for key boxes, headers, and highlights
+- For secondary box fills, use the accent color with opacity="0.1" or "0.15"
+- Use the gray palette for borders/dividers: #E2E8F0, #CBD5E1, #94A3B8
+
+QUALITY CHECKS:
+- No text overflows its containing box
+- No overlapping text elements
+- Every box is large enough for its text
+- No random decorative elements — every shape serves a purpose
+- The diagram must be immediately readable and professional"""
+
 
 SLIDE_W = 13.33
 SLIDE_H = 7.5
@@ -1080,10 +1156,8 @@ def index():
 
 @app.route("/api/generate", methods=["POST"])
 def generate():
-    if not GEMINI_API_KEY:
-        return jsonify({"error": "GEMINI_API_KEY not configured. Set it in environment variables."}), 500
-    if not getattr(genai, '_configured', True):
-        genai.configure(api_key=GEMINI_API_KEY)
+    if not _client:
+        return jsonify({"error": "ANTHROPIC_API_KEY not configured. Set it in environment variables."}), 500
 
     data = request.json
     text_val = data.get("text", "").strip()
@@ -1095,112 +1169,61 @@ def generate():
     font = data.get("font", "Helvetica Neue")
     image_b64 = data.get("image", None)
 
-    type_note = "" if diag_type == "Auto (best fit)" else f"\nPREFERRED DIAGRAM TYPE: {diag_type}\n"
+    type_line = "" if diag_type == "Auto (best fit)" else f"Preferred diagram type: {diag_type}\n"
+    intro = {
+        "text":  "Generate an SVG diagram for the topic below.",
+        "image": "Interpret the attached sketch and convert it into a professional SVG diagram.",
+        "both":  "Use the attached sketch as the structural reference. Apply the topic and styling below.",
+    }.get(mode, "Generate an SVG diagram for the topic below.")
 
-    prompt = f"""You are a top-tier McKinsey/BCG strategy consultant creating a presentation slide.
-Create a clean, professional SVG diagram in the style of McKinsey and BCG consulting decks.
+    user_text = (
+        f"{intro}\n\n"
+        f"TOPIC: {text_val or '(see attached image)'}\n"
+        f"{type_line}"
+        f"\nSTYLING:\n"
+        f"- Background color: {theme_bg}\n"
+        f"- Primary text color: {theme_text}\n"
+        f"- Accent color: {accent}\n"
+        f"- Font family: '{font}', Arial, sans-serif (apply on every <text> element)\n"
+        f"\nReturn ONLY the raw <svg> element."
+    )
 
-TOPIC: {text_val or '(see image)'}
-{type_note}
-DESIGN PRINCIPLES (McKinsey/BCG style):
-- Action-oriented title: state the insight/conclusion, not just the topic
-- Clean grid-based layout with clear visual hierarchy
-- Generous white space, no clutter
-- Each box should contain concise text (max 3-4 lines per box)
-- Use numbered labels or icons to guide the reader's eye
-- Source/footnote at bottom-left in small gray text
+    user_content = []
+    if (mode in ("image", "both")) and image_b64:
+        try:
+            if image_b64.startswith("data:"):
+                header, _, b64data = image_b64.partition(",")
+                media_type = header.split(";")[0].split(":")[1] or "image/png"
+            else:
+                b64data = image_b64
+                media_type = "image/png"
+            user_content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": media_type, "data": b64data},
+            })
+        except Exception as e:
+            return jsonify({"error": f"Invalid image data: {e}"}), 400
+    elif mode == "image" and not image_b64:
+        return jsonify({"error": "No image provided"}), 400
 
-=== STRICT SVG RULES (MUST FOLLOW) ===
-
-OUTPUT: Only the raw <svg> element. No markdown, no explanation, no code fences.
-
-CANVAS:
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080">
-Do NOT add width or height attributes on the <svg> tag.
-First child: <rect x="0" y="0" width="1920" height="1080" fill="{theme_bg}"/>
-
-ALLOWED ELEMENTS ONLY (DO NOT use any other SVG elements):
-- <rect> for boxes (use rx="8" for rounded corners)
-- <text> with <tspan> for all text content
-- <line> for straight connectors and arrows
-- <circle> for bullet points or decorative dots
-- <ellipse> for ovals
-- <polygon> for arrowheads and triangular shapes
-
-FORBIDDEN ELEMENTS (NEVER use these):
-- <path> — ABSOLUTELY FORBIDDEN. Never use path elements. They cause rendering errors.
-- <polyline> — use <line> instead
-- <use>, <image>, <foreignObject> — forbidden
-- CSS classes, <style> blocks, gradients, filters, clipPath, mask — forbidden
-
-COLORS:
-- Background: {theme_bg}
-- Primary text: {theme_text}
-- Accent: {accent} (for key boxes, headers, highlights — use sparingly)
-- Use lighter tints of the accent for secondary box fills (add opacity="0.1" or "0.15" on accent-colored rects)
-- Gray palette for borders/dividers: #E2E8F0, #CBD5E1, #94A3B8
-
-TYPOGRAPHY:
-- font-family="'{font}', Arial, sans-serif" on every <text> element
-- Title: font-size="44" to "52", font-weight="bold"
-- Subtitle/section headers: font-size="28" to "32", font-weight="bold"
-- Body text in boxes: font-size="18" to "22"
-- Labels/captions: font-size="14" to "16"
-- Footer/source: font-size="14", fill="#94A3B8"
-
-TEXT PLACEMENT RULES:
-- Every <text> MUST have text-anchor="middle" when centered in a box
-- For text inside a <rect>, the text x must equal rect_x + rect_width/2
-- For text inside a <rect>, the text y must be vertically centered within the rect
-- Use <tspan> with dy="24" or dy="28" for multi-line text within a box
-- Keep text SHORT: max 6-8 words per line, max 3-4 lines per box
-- ALL text content must be in English
-
-LAYOUT:
-- 80px padding from all edges
-- Title at top: y="70"
-- Main content area: y=130 to y=980
-- Footer/source at bottom: y="1050"
-- Minimum 20px gap between boxes
-- Align boxes to a grid (equal widths, equal heights in each row)
-
-ARROWS/CONNECTORS:
-- Use <line> elements with stroke and stroke-width for connectors
-- For arrowheads, place a small <polygon> triangle at the end of each line
-- Example arrow pointing right: <line x1="100" y1="200" x2="250" y2="200" stroke="#94A3B8" stroke-width="2"/>
-  followed by <polygon points="250,192 270,200 250,208" fill="#94A3B8"/>
-
-CRITICAL QUALITY CHECKS:
-- No text should overflow outside its containing box
-- No overlapping text elements
-- Every box that contains text must be large enough for the text
-- No random decorative elements — every shape must serve a purpose
-- The diagram must be immediately readable and professional"""
+    user_content.append({"type": "text", "text": user_text})
 
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = _client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=8000,
+            thinking={"type": "adaptive"},
+            system=[
+                {
+                    "type": "text",
+                    "text": SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": user_content}],
+        )
 
-        if mode == "text" or (mode == "both" and not image_b64):
-            result = model.generate_content(prompt)
-        else:
-            if not image_b64:
-                return jsonify({"error": "No image provided"}), 400
-
-            img_data = base64.b64decode(image_b64.split(",")[-1] if "," in image_b64 else image_b64)
-            mime = "image/jpeg"
-            if image_b64.startswith("data:"):
-                mime = image_b64.split(";")[0].split(":")[1]
-
-            img_suffix = (
-                f"Convert this image into a professional SVG diagram.\n\n{prompt}"
-                if mode == "image"
-                else f"Use the image as structural reference. Description: {text_val}\n\n{prompt}"
-            )
-
-            img_part = {"mime_type": mime, "data": img_data}
-            result = model.generate_content([img_part, img_suffix])
-
-        raw_text = result.text
+        raw_text = "".join(b.text for b in response.content if b.type == "text")
         svg_str = extract_svg(raw_text)
 
         if not svg_str:
@@ -1208,6 +1231,16 @@ CRITICAL QUALITY CHECKS:
 
         return jsonify({"svg": svg_str})
 
+    except anthropic.BadRequestError as e:
+        msg = str(e)
+        status = 402 if "credit balance" in msg.lower() else 400
+        return jsonify({"error": msg}), status
+    except anthropic.AuthenticationError as e:
+        return jsonify({"error": f"Invalid ANTHROPIC_API_KEY: {e}"}), 401
+    except anthropic.RateLimitError as e:
+        return jsonify({"error": f"Rate limited: {e}"}), 429
+    except anthropic.APIError as e:
+        return jsonify({"error": str(e)}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
